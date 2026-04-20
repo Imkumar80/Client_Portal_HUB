@@ -113,7 +113,7 @@ export default function Dashboard() {
                   return (
                     <div key={status}>
                       <div className="flex items-center justify-between mb-1.5 text-sm">
-                        <span className="font-medium">{STATUS_LABELS[status as any]}</span>
+                        <span className="font-medium">{STATUS_LABELS[status as keyof typeof STATUS_LABELS]}</span>
                         <span className="text-muted-foreground">{count} projects</span>
                       </div>
                       <div className="h-2.5 w-full bg-secondary/10 rounded-full overflow-hidden">

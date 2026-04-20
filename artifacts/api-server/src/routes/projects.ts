@@ -1,26 +1,30 @@
 import { Router, type IRouter } from "express";
-import { eq, desc, sql, and } from "drizzle-orm";
 
 function serializeDates<T>(record: T): T {
   if (record === null || record === undefined) return record;
   if (Array.isArray(record)) return record.map(serializeDates) as unknown as T;
   if (record instanceof Date) return record.toISOString() as unknown as T;
-  if (typeof record === "object") {
+  if (typeof record === "object" && record !== null) {
+    if (typeof (record as any).toJSON === "function") {
+      record = (record as any).toJSON();
+    }
     const result: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(record as Record<string, unknown>)) {
+      if (key === "_id" || key === "__v") continue; // Skip mongoose specific fields
       result[key] = value instanceof Date ? value.toISOString() : value;
     }
     return result as T;
   }
   return record;
 }
+
 import {
-  db,
-  projectsTable,
-  projectFilesTable,
-  commentsTable,
-  activityTable,
+  ProjectModel,
+  ProjectFileModel,
+  CommentModel,
+  ActivityModel,
 } from "@workspace/db";
+
 import {
   ListProjectsQueryParams,
   CreateProjectBody,
@@ -51,21 +55,15 @@ router.get("/projects", async (req, res): Promise<void> => {
     return;
   }
 
-  const conditions = [];
+  const conditions: any = {};
   if (query.data.status) {
-    conditions.push(eq(projectsTable.status, query.data.status));
+    conditions.status = query.data.status;
   }
   if (query.data.clientName) {
-    conditions.push(
-      sql`lower(${projectsTable.clientName}) like lower(${"%" + query.data.clientName + "%"})`,
-    );
+    conditions.clientName = { $regex: query.data.clientName, $options: "i" };
   }
 
-  const projects = await db
-    .select()
-    .from(projectsTable)
-    .where(conditions.length > 0 ? and(...conditions) : undefined)
-    .orderBy(desc(projectsTable.createdAt));
+  const projects = await ProjectModel.find(conditions).sort({ createdAt: -1 });
 
   res.json(ListProjectsResponse.parse(serializeDates(projects)));
 });
@@ -77,22 +75,19 @@ router.post("/projects", async (req, res): Promise<void> => {
     return;
   }
 
-  const [project] = await db
-    .insert(projectsTable)
-    .values({
-      clientName: parsed.data.clientName,
-      clientEmail: parsed.data.clientEmail,
-      title: parsed.data.title,
-      description: parsed.data.description,
-      projectType: parsed.data.projectType,
-      priority: parsed.data.priority,
-      budget: parsed.data.budget ?? null,
-      deadline: parsed.data.deadline ?? null,
-      notes: parsed.data.notes ?? null,
-    })
-    .returning();
+  const project = await ProjectModel.create({
+    clientName: parsed.data.clientName,
+    clientEmail: parsed.data.clientEmail,
+    title: parsed.data.title,
+    description: parsed.data.description,
+    projectType: parsed.data.projectType,
+    priority: parsed.data.priority,
+    budget: parsed.data.budget ?? null,
+    deadline: parsed.data.deadline ?? null,
+    notes: parsed.data.notes ?? null,
+  });
 
-  await db.insert(activityTable).values({
+  await ActivityModel.create({
     type: "project_created",
     projectId: project.id,
     projectTitle: project.title,
@@ -109,28 +104,18 @@ router.get("/projects/:id", async (req, res): Promise<void> => {
     return;
   }
 
-  const [project] = await db
-    .select()
-    .from(projectsTable)
-    .where(eq(projectsTable.id, params.data.id));
+  const project = await ProjectModel.findOne({ id: params.data.id });
 
   if (!project) {
     res.status(404).json({ error: "Project not found" });
     return;
   }
 
-  const files = await db
-    .select()
-    .from(projectFilesTable)
-    .where(eq(projectFilesTable.projectId, params.data.id));
+  const files = await ProjectFileModel.find({ projectId: params.data.id });
+  const comments = await CommentModel.find({ projectId: params.data.id }).sort({ createdAt: -1 });
 
-  const comments = await db
-    .select()
-    .from(commentsTable)
-    .where(eq(commentsTable.projectId, params.data.id))
-    .orderBy(desc(commentsTable.createdAt));
-
-  res.json(GetProjectResponse.parse(serializeDates({ ...project, files, comments })));
+  const responseData = serializeDates({ ...project.toJSON(), files, comments });
+  res.json(GetProjectResponse.parse(responseData));
 });
 
 router.patch("/projects/:id", async (req, res): Promise<void> => {
@@ -146,32 +131,27 @@ router.patch("/projects/:id", async (req, res): Promise<void> => {
     return;
   }
 
-  const [existing] = await db
-    .select()
-    .from(projectsTable)
-    .where(eq(projectsTable.id, params.data.id));
+  const existing = await ProjectModel.findOne({ id: params.data.id });
 
   if (!existing) {
     res.status(404).json({ error: "Project not found" });
     return;
   }
 
-  const updateData: Partial<typeof projectsTable.$inferInsert> = {};
+  const updateData: any = {};
   if (parsed.data.status !== undefined) updateData.status = parsed.data.status;
-  if (parsed.data.priority !== undefined)
-    updateData.priority = parsed.data.priority;
+  if (parsed.data.priority !== undefined) updateData.priority = parsed.data.priority;
   if (parsed.data.notes !== undefined) updateData.notes = parsed.data.notes;
-  if (parsed.data.deadline !== undefined)
-    updateData.deadline = parsed.data.deadline;
+  if (parsed.data.deadline !== undefined) updateData.deadline = parsed.data.deadline;
 
-  const [project] = await db
-    .update(projectsTable)
-    .set(updateData)
-    .where(eq(projectsTable.id, params.data.id))
-    .returning();
+  const project = await ProjectModel.findOneAndUpdate(
+    { id: params.data.id },
+    { $set: updateData },
+    { new: true }
+  );
 
-  if (parsed.data.status && parsed.data.status !== existing.status) {
-    await db.insert(activityTable).values({
+  if (project && parsed.data.status && parsed.data.status !== existing.status) {
+    await ActivityModel.create({
       type: "status_changed",
       projectId: project.id,
       projectTitle: project.title,
@@ -189,10 +169,7 @@ router.delete("/projects/:id", async (req, res): Promise<void> => {
     return;
   }
 
-  const [project] = await db
-    .delete(projectsTable)
-    .where(eq(projectsTable.id, params.data.id))
-    .returning();
+  const project = await ProjectModel.findOneAndDelete({ id: params.data.id });
 
   if (!project) {
     res.status(404).json({ error: "Project not found" });
@@ -215,28 +192,22 @@ router.post("/projects/:id/files", async (req, res): Promise<void> => {
     return;
   }
 
-  const [project] = await db
-    .select()
-    .from(projectsTable)
-    .where(eq(projectsTable.id, params.data.id));
+  const project = await ProjectModel.findOne({ id: params.data.id });
 
   if (!project) {
     res.status(404).json({ error: "Project not found" });
     return;
   }
 
-  const [file] = await db
-    .insert(projectFilesTable)
-    .values({
-      projectId: params.data.id,
-      fileName: parsed.data.fileName,
-      fileType: parsed.data.fileType,
-      fileSize: parsed.data.fileSize,
-      url: parsed.data.url,
-    })
-    .returning();
+  const file = await ProjectFileModel.create({
+    projectId: params.data.id,
+    fileName: parsed.data.fileName,
+    fileType: parsed.data.fileType,
+    fileSize: parsed.data.fileSize,
+    url: parsed.data.url,
+  });
 
-  await db.insert(activityTable).values({
+  await ActivityModel.create({
     type: "file_uploaded",
     projectId: params.data.id,
     projectTitle: project.title,
@@ -253,11 +224,7 @@ router.get("/projects/:id/comments", async (req, res): Promise<void> => {
     return;
   }
 
-  const comments = await db
-    .select()
-    .from(commentsTable)
-    .where(eq(commentsTable.projectId, params.data.id))
-    .orderBy(desc(commentsTable.createdAt));
+  const comments = await CommentModel.find({ projectId: params.data.id }).sort({ createdAt: -1 });
 
   res.json(serializeDates(comments));
 });
@@ -275,27 +242,21 @@ router.post("/projects/:id/comments", async (req, res): Promise<void> => {
     return;
   }
 
-  const [project] = await db
-    .select()
-    .from(projectsTable)
-    .where(eq(projectsTable.id, params.data.id));
+  const project = await ProjectModel.findOne({ id: params.data.id });
 
   if (!project) {
     res.status(404).json({ error: "Project not found" });
     return;
   }
 
-  const [comment] = await db
-    .insert(commentsTable)
-    .values({
-      projectId: params.data.id,
-      author: parsed.data.author,
-      authorRole: parsed.data.authorRole,
-      content: parsed.data.content,
-    })
-    .returning();
+  const comment = await CommentModel.create({
+    projectId: params.data.id,
+    author: parsed.data.author,
+    authorRole: parsed.data.authorRole,
+    content: parsed.data.content,
+  });
 
-  await db.insert(activityTable).values({
+  await ActivityModel.create({
     type: "comment_added",
     projectId: params.data.id,
     projectTitle: project.title,
@@ -306,7 +267,7 @@ router.post("/projects/:id/comments", async (req, res): Promise<void> => {
 });
 
 router.get("/dashboard/stats", async (_req, res): Promise<void> => {
-  const projects = await db.select().from(projectsTable);
+  const projects = await ProjectModel.find();
 
   const totalProjects = projects.length;
   const activeProjects = projects.filter((p) =>
@@ -342,10 +303,8 @@ router.get("/dashboard/activity", async (req, res): Promise<void> => {
   const query = GetRecentActivityQueryParams.safeParse(req.query);
   const limit = query.success ? (query.data.limit ?? 10) : 10;
 
-  const activities = await db
-    .select()
-    .from(activityTable)
-    .orderBy(desc(activityTable.createdAt))
+  const activities = await ActivityModel.find()
+    .sort({ createdAt: -1 })
     .limit(limit);
 
   res.json(GetRecentActivityResponse.parse(serializeDates(activities)));

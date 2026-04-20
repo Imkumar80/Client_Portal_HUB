@@ -1,98 +1,121 @@
-import {
-  pgTable,
-  text,
-  serial,
-  timestamp,
-  integer,
-} from "drizzle-orm/pg-core";
-import { createInsertSchema } from "drizzle-zod";
-import { z } from "zod/v4";
+import mongoose, { Schema, Document } from "mongoose";
+import AutoIncrementFactory from "mongoose-sequence";
+import { z } from "zod";
 
-export const projectsTable = pgTable("projects", {
-  id: serial("id").primaryKey(),
-  clientName: text("client_name").notNull(),
-  clientEmail: text("client_email").notNull(),
-  title: text("title").notNull(),
-  description: text("description").notNull(),
-  projectType: text("project_type").notNull(),
-  status: text("status").notNull().default("pending"),
-  priority: text("priority").notNull().default("normal"),
-  budget: text("budget"),
-  deadline: text("deadline"),
-  notes: text("notes"),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true })
-    .notNull()
-    .defaultNow()
-    .$onUpdate(() => new Date()),
-});
+const AutoIncrement = AutoIncrementFactory(mongoose);
 
-export const insertProjectSchema = createInsertSchema(projectsTable).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-});
-export type InsertProject = z.infer<typeof insertProjectSchema>;
-export type Project = typeof projectsTable.$inferSelect;
+// Project
+export interface Project extends Document {
+  id: number;
+  clientName: string;
+  clientEmail: string;
+  title: string;
+  description: string;
+  projectType: string;
+  status: string;
+  priority: string;
+  budget?: string | null;
+  deadline?: string | null;
+  notes?: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
 
-export const projectFilesTable = pgTable("project_files", {
-  id: serial("id").primaryKey(),
-  projectId: integer("project_id")
-    .notNull()
-    .references(() => projectsTable.id, { onDelete: "cascade" }),
-  fileName: text("file_name").notNull(),
-  fileType: text("file_type").notNull(),
-  fileSize: integer("file_size").notNull(),
-  url: text("url").notNull(),
-  uploadedAt: timestamp("uploaded_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-});
+const ProjectSchema = new Schema<Project>(
+  {
+    clientName: { type: String, required: true },
+    clientEmail: { type: String, required: true },
+    title: { type: String, required: true },
+    description: { type: String, required: true },
+    projectType: { type: String, required: true },
+    status: { type: String, required: true, default: "pending" },
+    priority: { type: String, required: true, default: "normal" },
+    budget: { type: String, default: null },
+    deadline: { type: String, default: null },
+    notes: { type: String, default: null },
+  },
+  { timestamps: true }
+);
 
-export const insertProjectFileSchema = createInsertSchema(
-  projectFilesTable,
-).omit({ id: true, uploadedAt: true });
-export type InsertProjectFile = z.infer<typeof insertProjectFileSchema>;
-export type ProjectFile = typeof projectFilesTable.$inferSelect;
+ProjectSchema.plugin(AutoIncrement, { inc_field: "id", id: "project_id" });
 
-export const commentsTable = pgTable("comments", {
-  id: serial("id").primaryKey(),
-  projectId: integer("project_id")
-    .notNull()
-    .references(() => projectsTable.id, { onDelete: "cascade" }),
-  author: text("author").notNull(),
-  authorRole: text("author_role").notNull(),
-  content: text("content").notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-});
+export const ProjectModel =
+  mongoose.models.Project || mongoose.model<Project>("Project", ProjectSchema);
 
-export const insertCommentSchema = createInsertSchema(commentsTable).omit({
-  id: true,
-  createdAt: true,
-});
-export type InsertComment = z.infer<typeof insertCommentSchema>;
-export type Comment = typeof commentsTable.$inferSelect;
+// Project File
+export interface ProjectFile extends Document {
+  id: number;
+  projectId: number;
+  fileName: string;
+  fileType: string;
+  fileSize: number;
+  url: string;
+  uploadedAt: Date;
+}
 
-export const activityTable = pgTable("activity", {
-  id: serial("id").primaryKey(),
-  type: text("type").notNull(),
-  projectId: integer("project_id")
-    .notNull()
-    .references(() => projectsTable.id, { onDelete: "cascade" }),
-  projectTitle: text("project_title").notNull(),
-  description: text("description").notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-});
+const ProjectFileSchema = new Schema<ProjectFile>(
+  {
+    projectId: { type: Number, required: true },
+    fileName: { type: String, required: true },
+    fileType: { type: String, required: true },
+    fileSize: { type: Number, required: true },
+    url: { type: String, required: true },
+  },
+  { timestamps: { createdAt: "uploadedAt", updatedAt: false } }
+);
 
-export const insertActivitySchema = createInsertSchema(activityTable).omit({
-  id: true,
-  createdAt: true,
-});
-export type InsertActivity = z.infer<typeof insertActivitySchema>;
-export type Activity = typeof activityTable.$inferSelect;
+ProjectFileSchema.plugin(AutoIncrement, { inc_field: "id", id: "project_file_id" });
+
+export const ProjectFileModel =
+  mongoose.models.ProjectFile ||
+  mongoose.model<ProjectFile>("ProjectFile", ProjectFileSchema);
+
+// Comment
+export interface Comment extends Document {
+  id: number;
+  projectId: number;
+  author: string;
+  authorRole: string;
+  content: string;
+  createdAt: Date;
+}
+
+const CommentSchema = new Schema<Comment>(
+  {
+    projectId: { type: Number, required: true },
+    author: { type: String, required: true },
+    authorRole: { type: String, required: true },
+    content: { type: String, required: true },
+  },
+  { timestamps: { createdAt: true, updatedAt: false } }
+);
+
+CommentSchema.plugin(AutoIncrement, { inc_field: "id", id: "comment_id" });
+
+export const CommentModel =
+  mongoose.models.Comment || mongoose.model<Comment>("Comment", CommentSchema);
+
+// Activity
+export interface Activity extends Document {
+  id: number;
+  type: string;
+  projectId: number;
+  projectTitle: string;
+  description: string;
+  createdAt: Date;
+}
+
+const ActivitySchema = new Schema<Activity>(
+  {
+    type: { type: String, required: true },
+    projectId: { type: Number, required: true },
+    projectTitle: { type: String, required: true },
+    description: { type: String, required: true },
+  },
+  { timestamps: { createdAt: true, updatedAt: false } }
+);
+
+ActivitySchema.plugin(AutoIncrement, { inc_field: "id", id: "activity_id" });
+
+export const ActivityModel =
+  mongoose.models.Activity || mongoose.model<Activity>("Activity", ActivitySchema);
