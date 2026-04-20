@@ -22,12 +22,3 @@ To install and run the Client Portal HUB locally, follow these instructions:
 2. Navigate to the project directory: `cd Client_Portal_HUB`
 3. Install dependencies: `npm install`
 4. Start the server: `npm start`
-
-## Usage
-After starting the server, visit `http://localhost:3000` in your web browser to access the Client Portal HUB.
-
-## Contribution
-Contributions are welcome! Please fork the repository and submit a pull request with your changes.
-
-## License
-This project is licensed under the MIT License. See the LICENSE file for more details.
